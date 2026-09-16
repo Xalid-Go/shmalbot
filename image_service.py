@@ -142,7 +142,7 @@ class ImageService:
                         "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
                     }
-                    payload = {"prompt": prompt, "num_steps": 4}
+                    payload = {"prompt": prompt}
 
                     try:
                         logger.debug("Trying Cloudflare model %s with token %s...", model, token[:8])
