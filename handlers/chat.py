@@ -195,6 +195,10 @@ async def handle_text_message(message: Message):
                     source="direct",
                 )
                 return
+            else:
+                fail_msg = "Ой, прости пожалуйста... 🥺 У меня не получилось нарисовать щас! 👉👈 Попроси ещё разок, пожалуйста!" if is_girlfriend else "Чёт генератор щас подвис, черкани ещё раз или чуть другими словами попробуй)"
+                await message.answer(fail_msg, parse_mode=None)
+                return
 
     # 2. Check if spontaneous/random image should be sent
     if image_service.should_send_random_image(chat_id):

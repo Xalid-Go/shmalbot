@@ -16,11 +16,12 @@ CHAT_MESSAGE_COUNTERS: dict[int, int] = {}
 
 # Regular expressions for explicit drawing / photo requests
 IMAGE_TRIGGER_REGEX = re.compile(
-    r"(?:нарисуй|сгенерируй|скинь\s+фотку|скинь\s+фото|скинь\s+картинку|"
-    r"покажи\s+фотку|покажи\s+фото|покажи\s+картинку|пришли\s+фотку|"
-    r"пришли\s+фото|пришли\s+картинку|хочу\s+увидеть|сделай\s+арт|"
-    r"нарисуй\s+мне|покажи\s+мне|скинь\s+мне\s+фотку|нарисуй\s+себя|"
-    r"скинь\s+селфи|сделай\s+картинку)",
+    r"(?:^|\s)(?:"
+    r"нарисуй[а-я]*|сгенерируй[а-я]*|создай[а-я]*|изобрази[а-я]*|"
+    r"(?:сделай|скинь|пришли|отправь|покажи|дай|хочу)\s+(?:мне\s+)?(?:фотку|фото|картинку|изображение|рисунок|арт|селфи|аватарку)|"
+    r"(?:фотку|фото|картинку|изображение|рисунок|арт)\s+(?:сделай|нарисуй|сгенерируй|скинь|пришли|создай)|"
+    r"хочу\s+(?:увидеть|посмотреть)"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -74,11 +75,18 @@ class ImageService:
 
         match = IMAGE_TRIGGER_REGEX.search(text)
         if match:
-            # Extract subject after trigger or full query
+            # Extract subject after trigger or before trigger
             subject = text[match.end():].strip()
-            # Clean common filler words
-            subject = re.sub(r"^(пожалуйста|плиз|быстро|щас|мне|как|что|что-нибудь)\s+", "", subject, flags=re.IGNORECASE).strip()
             if not subject:
+                subject = text[:match.start()].strip()
+            # Clean common filler words
+            subject = re.sub(
+                r"^(пожалуйста|плиз|быстро|щас|мне|как|что|что-нибудь|картинку|изображение|фото|фотку|рисунок|арт)\s+",
+                "",
+                subject,
+                flags=re.IGNORECASE,
+            ).strip()
+            if not subject or len(subject) < 2:
                 subject = text.strip()
             return True, subject
 
