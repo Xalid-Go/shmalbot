@@ -21,7 +21,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-logger = logging.getLogger("ai_assistant_bot")
+logger = logging.getLogger("shmalbot")
 
 
 import socket
