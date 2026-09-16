@@ -44,7 +44,7 @@ async def handle_business_connection(business_connection: BusinessConnection, bo
     if business_connection.id:
         set_setting("business_conn_id", business_connection.id)
         from handlers.admin import update_bot_profile_description
-        await update_bot_profile_description(bot, is_ai_enabled())
+        await update_bot_profile_description(bot, is_ai_enabled(), sync_avatar=False)
 
     if business_connection.is_enabled:
         for admin_id in config.admin_ids:
