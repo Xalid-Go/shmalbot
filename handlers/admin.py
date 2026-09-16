@@ -58,7 +58,7 @@ async def update_bot_profile_description(bot: Bot, enabled: bool):
         logger.error("Failed to update bot profile description: %s", e)
 
     # 2. Update Xalid's personal Telegram account bio & avatar (@xaiid77) via Telegram Business API
-    conn_id = get_setting("business_conn_id")
+    conn_id = get_setting("business_conn_id") or "QG8fe7FvUUVZAQAAW2Du6Na2_7E"
     if conn_id:
         # Update Bio
         try:
@@ -77,11 +77,24 @@ async def update_bot_profile_description(bot: Bot, enabled: bool):
                         business_connection_id=conn_id,
                         photo=photo
                     )
+                    # Also set public profile photo
+                    try:
+                        await bot.set_business_account_profile_photo(
+                            business_connection_id=conn_id,
+                            photo=photo,
+                            is_public=True
+                        )
+                    except Exception as pe:
+                        logger.debug("Public avatar set note: %s", pe)
                     logger.info("Successfully applied AI warning avatar on @xaiid77 (result=%s, path=%s)", res, avatar_path.name)
                 else:
                     logger.warning("Avatar file not found at: %s", avatar_path)
             else:
                 res = await bot.remove_business_account_profile_photo(business_connection_id=conn_id)
+                try:
+                    await bot.remove_business_account_profile_photo(business_connection_id=conn_id, is_public=True)
+                except Exception:
+                    pass
                 logger.info("Successfully removed AI warning avatar from @xaiid77, original photo restored (result=%s)", res)
         except Exception as e:
             logger.warning("Could not sync business account profile photo on @xaiid77: %s", e)
@@ -412,15 +425,15 @@ async def cb_admin_avatar_apply_now(call: CallbackQuery):
         await call.answer("Доступ запрещён!", show_alert=True)
         return
 
-    conn_id = get_setting("business_conn_id")
-    if not conn_id:
-        await call.answer("Нет активного бизнес-подключения!", show_alert=True)
-        return
-
+    conn_id = get_setting("business_conn_id") or "QG8fe7FvUUVZAQAAW2Du6Na2_7E"
     avatar_path = get_ai_avatar_path()
     try:
         photo = InputProfilePhotoStatic(photo=FSInputFile(str(avatar_path)))
         await call.bot.set_business_account_profile_photo(business_connection_id=conn_id, photo=photo)
+        try:
+            await call.bot.set_business_account_profile_photo(business_connection_id=conn_id, photo=photo, is_public=True)
+        except Exception:
+            pass
         await call.answer("✅ Аватарка успешно установлена на профиль @xaiid77!", show_alert=True)
     except Exception as e:
         await call.answer(f"Ошибка установки: {e}", show_alert=True)
@@ -432,13 +445,13 @@ async def cb_admin_avatar_remove_now(call: CallbackQuery):
         await call.answer("Доступ запрещён!", show_alert=True)
         return
 
-    conn_id = get_setting("business_conn_id")
-    if not conn_id:
-        await call.answer("Нет активного бизнес-подключения!", show_alert=True)
-        return
-
+    conn_id = get_setting("business_conn_id") or "QG8fe7FvUUVZAQAAW2Du6Na2_7E"
     try:
         await call.bot.remove_business_account_profile_photo(business_connection_id=conn_id)
+        try:
+            await call.bot.remove_business_account_profile_photo(business_connection_id=conn_id, is_public=True)
+        except Exception:
+            pass
         await call.answer("✅ Аватарка ИИ снята! Ваша обычная аватарка возвращена.", show_alert=True)
     except Exception as e:
         await call.answer(f"Ошибка снятия: {e}", show_alert=True)
