@@ -80,7 +80,7 @@ async def main():
     try:
         from database import is_ai_enabled
         from handlers.admin import update_bot_profile_description
-        await update_bot_profile_description(bot, is_ai_enabled(), sync_avatar=False)
+        await update_bot_profile_description(bot, is_ai_enabled())
     except Exception as e:
         logger.warning("Could not sync profile description on startup: %s", e)
 
