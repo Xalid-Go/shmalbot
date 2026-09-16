@@ -12,6 +12,7 @@ from html_exporter import generate_chat_html
 from aiogram.types import BufferedInputFile
 from prompts import GIRLFRIEND_USERNAME
 from image_service import image_service
+from honor_service import honor_service
 
 logger = logging.getLogger(__name__)
 router = Router(name="chat_router")
@@ -131,6 +132,42 @@ async def handle_text_message(message: Message):
     history.append({"role": "user", "content": user_text})
     if len(history) > MAX_HISTORY_MESSAGES:
         history[:] = history[-MAX_HISTORY_MESSAGES:]
+
+    # 0. HONOR DEFENSE: Check if message is disrespectful/unworthy (girlfriend is exempt)
+    if not honor_service.is_exempt(sender.id, sender.username):
+        is_dishonor, dishonor_reason = await honor_service.check_dishonor(user_text, ai_service)
+        if is_dishonor:
+            dignity_reply = honor_service.get_response()
+            logger.warning("Honor violation in direct chat %s by user %s: %s", chat_id, sender.id, dishonor_reason)
+
+            # Answer firmly
+            await message.answer(dignity_reply, parse_mode=None)
+
+            # Save to context history and DB
+            history.append({"role": "assistant", "content": dignity_reply})
+            save_chat_message(
+                chat_id=chat_id,
+                chat_title=chat_title,
+                user_id=message.bot.id if hasattr(message.bot, "id") and message.bot.id else 8984079656,
+                username="bipbup992_robot",
+                full_name="Халид (ИИ)",
+                role="assistant",
+                text=dignity_reply,
+                is_photo=False,
+                source="direct",
+            )
+
+            # Alert Xalid immediately in his main bot DM!
+            await honor_service.alert_owner(
+                bot=message.bot,
+                chat_id=chat_id,
+                chat_title=chat_title,
+                user=sender,
+                user_text=user_text,
+                bot_reply=dignity_reply,
+                reason=dishonor_reason,
+            )
+            return
 
     # 1. Check if user asked to draw/send an image
     is_img_req, raw_prompt = image_service.is_image_request(user_text)

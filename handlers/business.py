@@ -19,6 +19,7 @@ from ai_service import ai_service
 from database import is_ai_enabled, save_chat_message, set_setting
 from prompts import GIRLFRIEND_USERNAME
 from image_service import image_service
+from honor_service import honor_service
 
 logger = logging.getLogger(__name__)
 router = Router(name="business_router")
@@ -125,6 +126,42 @@ async def handle_business_message(message: Message, bot: Bot):
     history.append({"role": "user", "content": user_text})
     if len(history) > MAX_BIZ_HISTORY:
         history[:] = history[-MAX_BIZ_HISTORY:]
+
+    # 0. HONOR DEFENSE: Check if anyone other than girlfriend wrote something disrespectful/unworthy
+    if not honor_service.is_exempt(sender.id, sender.username):
+        is_dishonor, dishonor_reason = await honor_service.check_dishonor(user_text, ai_service)
+        if is_dishonor:
+            dignity_reply = honor_service.get_response()
+            logger.warning("Honor violation in chat %s by user %s: %s", chat_id, sender.id, dishonor_reason)
+
+            # Answer firmly in the chat
+            await message.answer(dignity_reply, parse_mode=None)
+
+            # Save to context history and DB
+            history.append({"role": "assistant", "content": dignity_reply})
+            save_chat_message(
+                chat_id=chat_id,
+                chat_title=chat_title,
+                user_id=bot.id if hasattr(bot, "id") and bot.id else 8984079656,
+                username="bipbup992_robot",
+                full_name="Халид (ИИ)",
+                role="assistant",
+                text=dignity_reply,
+                is_photo=False,
+                source="business",
+            )
+
+            # Alert Xalid immediately in his main bot DM!
+            await honor_service.alert_owner(
+                bot=bot,
+                chat_id=chat_id,
+                chat_title=chat_title,
+                user=sender,
+                user_text=user_text,
+                bot_reply=dignity_reply,
+                reason=dishonor_reason,
+            )
+            return
 
     # 1. Check if user/girlfriend explicitly asked for an image
     is_img_req, raw_prompt = image_service.is_image_request(user_text)
