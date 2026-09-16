@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
-import logging
+import os
+from pathlib import Path
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import (
@@ -8,6 +8,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     BufferedInputFile,
+    FSInputFile,
+    InputProfilePhotoStatic,
 )
 from config import config
 from ai_service import ai_service
@@ -25,9 +27,21 @@ from html_exporter import generate_chat_html, generate_all_chats_html
 logger = logging.getLogger(__name__)
 router = Router(name="admin_router")
 
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+
+
+def get_ai_avatar_path() -> Path:
+    """Returns absolute path to the active AI warning avatar based on theme setting."""
+    theme = get_setting("avatar_theme", "white")
+    if theme == "dark":
+        p = ASSETS_DIR / "ai_avatar_dark.jpg"
+        if p.exists():
+            return p
+    return ASSETS_DIR / "ai_avatar_on.jpg"
+
 
 async def update_bot_profile_description(bot: Bot, enabled: bool):
-    """Updates bot profile bio/description AND personal Telegram Business account (@xaiid77) bio."""
+    """Updates bot profile bio/description AND personal Telegram Business account (@xaiid77) bio & avatar."""
     target_bio = "ВКЛЮЧЕН ИИ ! ! ! (ПИШЕТ НЕ ХАЛИД)" if enabled else ""
 
     # 1. Update bot's own profile description
@@ -42,14 +56,34 @@ async def update_bot_profile_description(bot: Bot, enabled: bool):
     except Exception as e:
         logger.error("Failed to update bot profile description: %s", e)
 
-    # 2. Update Xalid's personal Telegram account bio (@xaiid77) via Telegram Business API
+    # 2. Update Xalid's personal Telegram account bio & avatar (@xaiid77) via Telegram Business API
     conn_id = get_setting("business_conn_id")
     if conn_id:
+        # Update Bio
         try:
             await bot.set_business_account_bio(business_connection_id=conn_id, bio=target_bio)
             logger.info("Successfully updated @xaiid77 business account bio to: '%s'", target_bio)
         except Exception as e:
             logger.warning("Could not set business account bio on @xaiid77: %s (ensure 'Manage Bio' permission is granted)", e)
+
+        # 3. Automatic Profile Avatar Swapper on @xaiid77
+        try:
+            if enabled:
+                avatar_path = get_ai_avatar_path()
+                if avatar_path.exists():
+                    photo = InputProfilePhotoStatic(photo=FSInputFile(str(avatar_path)))
+                    res = await bot.set_business_account_profile_photo(
+                        business_connection_id=conn_id,
+                        photo=photo
+                    )
+                    logger.info("Successfully applied AI warning avatar on @xaiid77 (result=%s, path=%s)", res, avatar_path.name)
+                else:
+                    logger.warning("Avatar file not found at: %s", avatar_path)
+            else:
+                res = await bot.remove_business_account_profile_photo(business_connection_id=conn_id)
+                logger.info("Successfully removed AI warning avatar from @xaiid77, original photo restored (result=%s)", res)
+        except Exception as e:
+            logger.warning("Could not sync business account profile photo on @xaiid77: %s", e)
 
 
 def get_admin_main_kb() -> InlineKeyboardMarkup:
@@ -63,6 +97,9 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
         "disabled": "🔴 Выключено",
     }
     v_label = v_mode_labels.get(config.vision_mode, config.vision_mode)
+
+    av_theme = get_setting("avatar_theme", "white")
+    theme_icon = "⚪ Светлая" if av_theme == "white" else "⚫ Тёмная"
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -92,6 +129,12 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text=f"🖼️ Аватарка ИИ: {theme_icon}",
+                    callback_data="adm_menu_avatar",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🧪 Тест скорости моделей (Пинг)",
                     callback_data="adm_test_models",
                 )
@@ -106,6 +149,50 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="❌ Закрыть панель",
                     callback_data="adm_close",
+                )
+            ],
+        ]
+    )
+    return kb
+
+
+def get_avatar_menu_kb() -> InlineKeyboardMarkup:
+    """Keyboard for AI warning avatar management."""
+    theme = get_setting("avatar_theme", "white")
+    w_mark = "✅ " if theme == "white" else ""
+    d_mark = "✅ " if theme == "dark" else ""
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{w_mark}⚪ Светлый стиль (Оригинал)",
+                    callback_data="adm_set_av_white",
+                ),
+                InlineKeyboardButton(
+                    text=f"{d_mark}⚫ Тёмный кибер-стиль",
+                    callback_data="adm_set_av_dark",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👁️ Отправить превью в чат",
+                    callback_data="adm_av_preview",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚡ Установить на аву сейчас",
+                    callback_data="adm_av_apply_now",
+                ),
+                InlineKeyboardButton(
+                    text="🧹 Снять с авы (вернуть свою)",
+                    callback_data="adm_av_remove_now",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад в меню",
+                    callback_data="adm_main",
                 )
             ],
         ]
@@ -217,8 +304,143 @@ async def cb_toggle_ai(call: CallbackQuery):
     await update_bot_profile_description(call.bot, new_state)
 
     status_str = "🟢 ВКЛЮЧЁН" if new_state else "🔴 ВЫКЛЮЧЕН"
-    await call.answer(f"ИИ-собеседник теперь {status_str}!", show_alert=True)
+    av_info = " (Аватарка ИИ активирована)" if new_state else " (Аватарка ИИ снята)"
+    await call.answer(f"ИИ-собеседник теперь {status_str}!{av_info}", show_alert=True)
     await cb_admin_main(call)
+
+
+@router.message(Command("avatar"))
+async def handle_avatar_command(message: Message):
+    if not config.is_admin(message.from_user.id):
+        return
+
+    theme = get_setting("avatar_theme", "white")
+    theme_str = "⚪ Светлый (Оригинал)" if theme == "white" else "⚫ Тёмный (Кибер)"
+    ai_state = "🟢 ВКЛЮЧЁН (аватарка активна)" if is_ai_enabled() else "🔴 ВЫКЛЮЧЕН (аватарка снята)"
+
+    text = (
+        "🖼️ <b>Управление аватаркой ИИ</b>\n\n"
+        f"🎨 <b>Текущий стиль:</b> {theme_str}\n"
+        f"🤖 <b>Статус ИИ:</b> {ai_state}\n\n"
+        "<i>Когда режим ИИ включён — эта аватарка автоматически ставится на ваш профиль @xaiid77.\n"
+        "Когда режим ИИ выключен — аватарка удаляется и возвращается ваша обычная!</i>"
+    )
+    await message.answer(text, reply_markup=get_avatar_menu_kb(), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_menu_avatar")
+async def cb_admin_avatar_menu(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    theme = get_setting("avatar_theme", "white")
+    theme_str = "⚪ Светлый (Оригинал)" if theme == "white" else "⚫ Тёмный (Кибер)"
+    ai_state = "🟢 ВКЛЮЧЁН (аватарка активна)" if is_ai_enabled() else "🔴 ВЫКЛЮЧЕН (аватарка снята)"
+
+    text = (
+        "🖼️ <b>Управление аватаркой ИИ</b>\n\n"
+        f"🎨 <b>Текущий стиль:</b> {theme_str}\n"
+        f"🤖 <b>Статус ИИ:</b> {ai_state}\n\n"
+        "<i>Когда режим ИИ включён — аватарка автоматически ставится на ваш профиль.\n"
+        "Когда режим ИИ выключен — аватарка автоматически убирается!</i>\n\n"
+        "Выберите нужное действие:"
+    )
+    await call.message.edit_text(text, reply_markup=get_avatar_menu_kb(), parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data == "adm_set_av_white")
+async def cb_admin_set_av_white(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    set_setting("avatar_theme", "white")
+    if is_ai_enabled():
+        await update_bot_profile_description(call.bot, True)
+
+    await call.answer("Выбран светлый стиль (Оригинал)!", show_alert=True)
+    await cb_admin_avatar_menu(call)
+
+
+@router.callback_query(F.data == "adm_set_av_dark")
+async def cb_admin_set_av_dark(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    set_setting("avatar_theme", "dark")
+    if is_ai_enabled():
+        await update_bot_profile_description(call.bot, True)
+
+    await call.answer("Выбран тёмный кибер-стиль!", show_alert=True)
+    await cb_admin_avatar_menu(call)
+
+
+@router.callback_query(F.data == "adm_av_preview")
+async def cb_admin_avatar_preview(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    avatar_path = get_ai_avatar_path()
+    if not avatar_path.exists():
+        await call.answer("Файл аватарки не найден!", show_alert=True)
+        return
+
+    await call.answer("Отправляю превью...")
+    theme = get_setting("avatar_theme", "white")
+    theme_str = "Светлый стиль (Оригинал)" if theme == "white" else "Тёмный кибер-стиль"
+    caption = (
+        f"🖼️ <b>Превью аватарки ИИ ({theme_str})</b>\n\n"
+        "Предупреждение на фото:\n"
+        "⚠️ <i>ВНИМАНИЕ: ВКЛЮЧЕН ИИ\nПИШЕТ ИИ, А НЕ ЧЕЛОВЕК\nОБЩАЕТСЯ НЕЙРОСЕТЬ (НЕ ХАЛИД)</i>\n\n"
+        "Ставится на аватарку при включении ИИ, убирается при выключении!"
+    )
+    await call.message.answer_photo(
+        photo=FSInputFile(str(avatar_path)),
+        caption=caption,
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "adm_av_apply_now")
+async def cb_admin_avatar_apply_now(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    conn_id = get_setting("business_conn_id")
+    if not conn_id:
+        await call.answer("Нет активного бизнес-подключения!", show_alert=True)
+        return
+
+    avatar_path = get_ai_avatar_path()
+    try:
+        photo = InputProfilePhotoStatic(photo=FSInputFile(str(avatar_path)))
+        await call.bot.set_business_account_profile_photo(business_connection_id=conn_id, photo=photo)
+        await call.answer("✅ Аватарка успешно установлена на профиль @xaiid77!", show_alert=True)
+    except Exception as e:
+        await call.answer(f"Ошибка установки: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "adm_av_remove_now")
+async def cb_admin_avatar_remove_now(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    conn_id = get_setting("business_conn_id")
+    if not conn_id:
+        await call.answer("Нет активного бизнес-подключения!", show_alert=True)
+        return
+
+    try:
+        await call.bot.remove_business_account_profile_photo(business_connection_id=conn_id)
+        await call.answer("✅ Аватарка ИИ снята! Ваша обычная аватарка возвращена.", show_alert=True)
+    except Exception as e:
+        await call.answer(f"Ошибка снятия: {e}", show_alert=True)
 
 
 @router.callback_query(F.data == "adm_menu_vision")
