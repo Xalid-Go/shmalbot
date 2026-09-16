@@ -2,4 +2,11 @@ venv/
 __pycache__/
 *.pyc
 .env
+bot.db
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+*.html
 .DS_Store

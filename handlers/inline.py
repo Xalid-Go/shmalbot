@@ -6,8 +6,12 @@ from aiogram.types import (
     InlineQuery,
     InlineQueryResultArticle,
     InputTextMessageContent,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
 )
 from ai_service import ai_service
+from config import config
+from database import is_ai_enabled, get_recent_chats
 
 logger = logging.getLogger(__name__)
 router = Router(name="inline_router")
@@ -15,22 +19,83 @@ router = Router(name="inline_router")
 
 @router.inline_query()
 async def handle_inline_query(inline_query: InlineQuery):
-    query = inline_query.query.strip()
-
-    # If query is empty or too short, show placeholder hint without querying LLM
-    if len(query) < 2:
-        hint_id = "hint_help"
-        results = [
+    if not is_ai_enabled() and not config.is_admin(inline_query.from_user.id):
+        lock_results = [
             InlineQueryResultArticle(
-                id=hint_id,
-                title="💡 Задайте вопрос ассистенту...",
-                description="Напишите любой вопрос после @имени_бота, например: @drugsAi_bot что такое квантовый компьютер?",
+                id="ai_disabled",
+                title="💤 ИИ-собеседник отключен",
+                description="Владелец бота временно отключил генерацию ответов в /admin",
                 input_message_content=InputTextMessageContent(
-                    message_text="Напишите вопрос после имени бота, чтобы получить быстрый ответ в чат.",
+                    message_text="ИИ-собеседник в данный момент отключен.",
                     parse_mode=None,
                 ),
             )
         ]
+        await inline_query.answer(results=lock_results, cache_time=2, is_personal=True)
+        return
+
+    query = inline_query.query.strip()
+    is_admin = config.is_admin(inline_query.from_user.id)
+
+    # 1. Admin inline dialog exporter
+    if is_admin and query.lower() in ("export", "logs", "диалоги", "chats", "чат"):
+        chats = get_recent_chats(limit=10)
+        bot_user = (await inline_query.bot.get_me()).username
+        export_results = []
+        for c in chats:
+            c_id = c["chat_id"]
+            c_name = c["full_name"] or c["chat_title"] or f"Чат {c_id}"
+            u_info = f"@{c['username']} • " if c["username"] else ""
+            cnt = c["message_count"]
+            deep_link = f"https://t.me/{bot_user}?start=export_{c_id}"
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    InlineKeyboardButton(text="📥 Открыть и скачать HTML", url=deep_link)
+                ]]
+            )
+            export_results.append(
+                InlineQueryResultArticle(
+                    id=f"exp_{c_id}",
+                    title=f"📜 {c_name} [{cnt} сообщ.]",
+                    description=f"{u_info}Нажмите для выгрузки HTML",
+                    input_message_content=InputTextMessageContent(
+                        message_text=f"📜 <b>История диалога:</b> {c_name}\nВсего сообщений: {cnt}\n\nНажмите кнопку ниже, чтобы получить готовый HTML-файл:",
+                        parse_mode="HTML",
+                    ),
+                    reply_markup=kb,
+                )
+            )
+        if export_results:
+            await inline_query.answer(results=export_results, cache_time=1, is_personal=True)
+            return
+
+    # If query is empty or too short, show placeholder hint without querying LLM
+    if len(query) < 2:
+        hint_id = "hint_help"
+        bot_user = (await inline_query.bot.get_me()).username
+        results = [
+            InlineQueryResultArticle(
+                id=hint_id,
+                title="💬 Напиши вопрос или фразу...",
+                description=f"Например: @{bot_user} чё делаешь вечером?",
+                input_message_content=InputTextMessageContent(
+                    message_text="Напиши вопрос после имени бота, чтобы отправить быстрый ответ в чат.",
+                    parse_mode=None,
+                ),
+            )
+        ]
+        if is_admin:
+            results.append(
+                InlineQueryResultArticle(
+                    id="hint_exp",
+                    title="📜 Экспорт диалогов (HTML)",
+                    description=f"Напишите: @{bot_user} export",
+                    input_message_content=InputTextMessageContent(
+                        message_text="Напишите @bipbup992_robot export для выбора диалогов.",
+                        parse_mode=None,
+                    ),
+                )
+            )
         await inline_query.answer(results=results, cache_time=1, is_personal=True)
         return
 
@@ -47,11 +112,11 @@ async def handle_inline_query(inline_query: InlineQuery):
         results = [
             InlineQueryResultArticle(
                 id=result_id,
-                title=f"💬 Ответ на: {query[:35]}",
+                title=f"🗣️ Ответ: {query[:35]}",
                 description=snippet,
                 input_message_content=InputTextMessageContent(
                     message_text=answer,
-                    parse_mode=None,  # Immune to HTML/Markdown parse errors
+                    parse_mode=None,
                 ),
             )
         ]
@@ -64,10 +129,10 @@ async def handle_inline_query(inline_query: InlineQuery):
         fallback_results = [
             InlineQueryResultArticle(
                 id=err_id,
-                title="⚠️ Ошибка генерации",
-                description="Не удалось сгенерировать ответ, нажмите чтобы отправить уведомление",
+                title="⚠️ Сбой связи",
+                description="Связь подглючивает, нажми чтобы повторить",
                 input_message_content=InputTextMessageContent(
-                    message_text="Извините, произошла ошибка при генерации ответа. Попробуйте ещё раз через несколько секунд.",
+                    message_text="Слушай, связь что-то подглючивает щас с телефона, повтори чуть позже!",
                     parse_mode=None,
                 ),
             )

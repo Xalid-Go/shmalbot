@@ -1,23 +1,62 @@
 # -*- coding: utf-8 -*-
 import logging
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import (
     Message,
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    BufferedInputFile,
 )
 from config import config
 from ai_service import ai_service
 from handlers.chat import CHAT_HISTORIES
+from database import (
+    is_ai_enabled,
+    set_ai_enabled,
+    get_setting,
+    set_setting,
+    get_recent_chats,
+    get_chat_history,
+)
+from html_exporter import generate_chat_html, generate_all_chats_html
 
 logger = logging.getLogger(__name__)
 router = Router(name="admin_router")
 
 
+async def update_bot_profile_description(bot: Bot, enabled: bool):
+    """Updates bot profile bio/description AND personal Telegram Business account (@xaiid77) bio."""
+    target_bio = "ВКЛЮЧЕН ИИ ! ! ! (ПИШЕТ НЕ ХАЛИД)" if enabled else ""
+
+    # 1. Update bot's own profile description
+    try:
+        if enabled:
+            await bot.set_my_short_description(target_bio)
+            await bot.set_my_description(f"{target_bio}\n\nБот общается в режиме цифрового двойника от имени Халида.")
+        else:
+            await bot.set_my_short_description("")
+            await bot.set_my_description("")
+        logger.info("Bot's own description updated (enabled=%s)", enabled)
+    except Exception as e:
+        logger.error("Failed to update bot profile description: %s", e)
+
+    # 2. Update Xalid's personal Telegram account bio (@xaiid77) via Telegram Business API
+    conn_id = get_setting("business_conn_id")
+    if conn_id:
+        try:
+            await bot.set_business_account_bio(business_connection_id=conn_id, bio=target_bio)
+            logger.info("Successfully updated @xaiid77 business account bio to: '%s'", target_bio)
+        except Exception as e:
+            logger.warning("Could not set business account bio on @xaiid77: %s (ensure 'Manage Bio' permission is granted)", e)
+
+
 def get_admin_main_kb() -> InlineKeyboardMarkup:
-    """Main admin dashboard keyboard."""
+    """Main clean admin dashboard keyboard."""
+    ai_on = is_ai_enabled()
+    ai_btn_text = "🤖 ИИ-собеседник: 🟢 ВКЛЮЧЁН" if ai_on else "🤖 ИИ-собеседник: 🔴 ВЫКЛЮЧЕН"
+
     v_mode_labels = {
         "all": "🟢 Для всех",
         "admin_only": "🔒 Только админ",
@@ -29,31 +68,39 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"🤖 Модель: {config.model}",
+                    text=ai_btn_text,
+                    callback_data="adm_toggle_ai",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📜 Экспорт диалогов (HTML)",
+                    callback_data="adm_menu_export",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"⚙️ Модель: {config.model}",
                     callback_data="adm_menu_models",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"👁️ Зрение (фото): {v_label}",
+                    text=f"👁️ Реакция на фото: {v_label}",
                     callback_data="adm_menu_vision",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🧪 Тест всех моделей (Пинг)",
+                    text="🧪 Тест скорости моделей (Пинг)",
                     callback_data="adm_test_models",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="📊 Статистика и инфо",
-                    callback_data="adm_stats",
-                ),
-                InlineKeyboardButton(
-                    text="🧹 Сброс памяти чатов",
+                    text="🧹 Сбросить контекст диалогов",
                     callback_data="adm_clear_memory",
-                ),
+                )
             ],
             [
                 InlineKeyboardButton(
@@ -124,17 +171,18 @@ async def get_models_kb() -> InlineKeyboardMarkup:
 async def handle_admin_command(message: Message):
     user_id = message.from_user.id
     if not config.is_admin(user_id):
-        await message.answer("⛔ Доступ ограничен. Панель управления доступна только администратору.")
+        await message.answer("⛔ Доступ ограничен. Панель управления доступна только владельцу бота.")
         return
 
+    ai_status = "🟢 ВКЛЮЧЁН (активно отвечает)" if is_ai_enabled() else "🔴 ВЫКЛЮЧЕН (молчит)"
     text = (
-        "👑 **Панель управления AI-ботом**\n\n"
-        f"👤 Админ ID: `{user_id}`\n"
-        f"🤖 Активная модель: `{config.model}`\n"
-        f"👁️ Режим фото: `{config.vision_mode}`\n"
-        f"🎛️ Выберите действие в меню ниже:"
+        "👑 <b>Панель управления (ИИ-собеседник)</b>\n\n"
+        f"🤖 <b>Статус ИИ:</b> {ai_status}\n"
+        f"⚙️ <b>Активная модель:</b> <code>{config.model}</code>\n"
+        f"👁️ <b>Режим фото:</b> {config.vision_mode}\n\n"
+        "Нажмите на кнопку ниже, чтобы включить/выключить ИИ или изменить настройки:"
     )
-    await message.answer(text, reply_markup=get_admin_main_kb(), parse_mode="Markdown")
+    await message.answer(text, reply_markup=get_admin_main_kb(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "adm_main")
@@ -143,14 +191,34 @@ async def cb_admin_main(call: CallbackQuery):
         await call.answer("Доступ запрещён!", show_alert=True)
         return
 
+    ai_status = "🟢 ВКЛЮЧЁН (активно отвечает)" if is_ai_enabled() else "🔴 ВЫКЛЮЧЕН (молчит)"
     text = (
-        "👑 **Панель управления AI-ботом**\n\n"
-        f"🤖 Активная модель: `{config.model}`\n"
-        f"👁️ Режим фото: `{config.vision_mode}`\n"
-        f"🎛️ Выберите действие в меню:"
+        "👑 <b>Панель управления (ИИ-собеседник)</b>\n\n"
+        f"🤖 <b>Статус ИИ:</b> {ai_status}\n"
+        f"⚙️ <b>Активная модель:</b> <code>{config.model}</code>\n"
+        f"👁️ <b>Режим фото:</b> {config.vision_mode}\n\n"
+        "Выберите нужное действие:"
     )
-    await call.message.edit_text(text, reply_markup=get_admin_main_kb(), parse_mode="Markdown")
+    await call.message.edit_text(text, reply_markup=get_admin_main_kb(), parse_mode="HTML")
     await call.answer()
+
+
+@router.callback_query(F.data == "adm_toggle_ai")
+async def cb_toggle_ai(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    current = is_ai_enabled()
+    new_state = not current
+    set_ai_enabled(new_state)
+
+    # Sync bot profile description
+    await update_bot_profile_description(call.bot, new_state)
+
+    status_str = "🟢 ВКЛЮЧЁН" if new_state else "🔴 ВЫКЛЮЧЕН"
+    await call.answer(f"ИИ-собеседник теперь {status_str}!", show_alert=True)
+    await cb_admin_main(call)
 
 
 @router.callback_query(F.data == "adm_menu_vision")
@@ -160,10 +228,10 @@ async def cb_admin_vision_menu(call: CallbackQuery):
         return
 
     text = (
-        "👁️ **Настройка распознавания фото и картинок (Vision)**\n\n"
-        "Выберите, кто может отправлять фото боту для анализа:"
+        "👁️ <b>Настройка реакции на фото</b>\n\n"
+        "Выберите, кому бот будет отвечать на присланные фотографии:"
     )
-    await call.message.edit_text(text, reply_markup=get_vision_kb(), parse_mode="Markdown")
+    await call.message.edit_text(text, reply_markup=get_vision_kb(), parse_mode="HTML")
     await call.answer()
 
 
@@ -194,11 +262,11 @@ async def cb_admin_models_menu(call: CallbackQuery):
     await call.answer("Загружаю список моделей...")
     kb = await get_models_kb()
     text = (
-        "🤖 **Выбор активной модели ИИ**\n\n"
-        f"Текущая модель: `{config.model}`\n"
-        "Нажмите на нужную модель, чтобы переключить бота:"
+        "⚙️ <b>Выбор активной модели ИИ</b>\n\n"
+        f"Текущая модель: <code>{config.model}</code>\n"
+        "Нажмите на нужную модель для переключения:"
     )
-    await call.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("adm_pick_model:"))
@@ -220,53 +288,28 @@ async def cb_admin_test_models(call: CallbackQuery):
         await call.answer("Доступ запрещён!", show_alert=True)
         return
 
-    await call.message.edit_text("⏳ **Тестирую модели через API... Подождите несколько секунд.**", parse_mode="Markdown")
+    await call.message.edit_text("⏳ <b>Тестирую скорость моделей... Подождите пару секунд.</b>", parse_mode="HTML")
 
     results = await ai_service.test_all_models()
-    lines = ["🧪 **Результаты тестирования моделей:**\n"]
+    lines = ["🧪 <b>Результаты пинга моделей:</b>\n"]
     for r in results:
         status_icon = "🟢" if r["status"] == "online" else "🔴"
         m_name = r["model"]
         is_curr = " (ТЕКУЩАЯ)" if m_name == config.model else ""
         if r["status"] == "online":
-            lines.append(f"{status_icon} `{m_name}`: **{r['latency_ms']}ms**{is_curr}")
+            lines.append(f"{status_icon} <code>{m_name}</code>: <b>{r['latency_ms']}ms</b>{is_curr}")
         else:
             err = r["error"] or "error"
-            lines.append(f"{status_icon} `{m_name}`: {err}{is_curr}")
+            lines.append(f"{status_icon} <code>{m_name}</code>: {err}{is_curr}")
 
-    lines.append("\n_Обновите меню для возврата._")
+    lines.append("\n_Нажмите Назад для возврата в меню._")
     back_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Повторить тест", callback_data="adm_test_models")],
             [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="adm_main")],
         ]
     )
-    await call.message.edit_text("\n".join(lines), reply_markup=back_kb, parse_mode="Markdown")
-    await call.answer()
-
-
-@router.callback_query(F.data == "adm_stats")
-async def cb_admin_stats(call: CallbackQuery):
-    if not config.is_admin(call.from_user.id):
-        await call.answer("Доступ запрещён!", show_alert=True)
-        return
-
-    active_chats = len(CHAT_HISTORIES)
-    total_messages = sum(len(h) for h in CHAT_HISTORIES.values())
-
-    text = (
-        "📊 **Статистика и состояние бота**\n\n"
-        f"🤖 **Текущая модель:** `{config.model}`\n"
-        f"🔄 **Фолбек-модели:** `{', '.join(config.fallback_models)}`\n"
-        f"👁️ **Режим фото:** `{config.vision_mode}`\n"
-        f"💬 **Активных чатов в памяти:** {active_chats}\n"
-        f"✉️ **Всего реплик в буфере памяти:** {total_messages}\n"
-        f"🌐 **Базовый URL API:** `{config.base_url}`\n"
-    )
-    back_kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="adm_main")]]
-    )
-    await call.message.edit_text(text, reply_markup=back_kb, parse_mode="Markdown")
+    await call.message.edit_text("\n".join(lines), reply_markup=back_kb, parse_mode="HTML")
     await call.answer()
 
 
@@ -288,4 +331,124 @@ async def cb_admin_close(call: CallbackQuery):
         return
 
     await call.message.delete()
-    await call.answer("Админка закрыта.")
+    await call.answer("Панель закрыта.")
+
+
+def get_export_kb() -> InlineKeyboardMarkup:
+    """Keyboard listing chats for HTML export."""
+    chats = get_recent_chats(limit=15)
+    buttons = []
+    for c in chats:
+        c_id = c["chat_id"]
+        c_name = c["full_name"] or c["chat_title"] or f"Чат {c_id}"
+        u_name = f" (@{c['username']})" if c["username"] else ""
+        cnt = c["message_count"]
+        btn_text = f"👤 {c_name}{u_name} [{cnt}]"
+        if len(btn_text) > 38:
+            btn_text = btn_text[:35] + "..."
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"adm_dl_chat:{c_id}")])
+
+    if chats:
+        buttons.append([InlineKeyboardButton(text="📦 Скачать ВСЕ диалоги единым HTML", callback_data="adm_dl_all")])
+
+    buttons.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="adm_menu_export")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="adm_main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+@router.message(Command("export", "chats"))
+async def cmd_export_chats(message: Message):
+    if not config.is_admin(message.from_user.id):
+        await message.answer("Доступ запрещён!")
+        return
+    chats = get_recent_chats(limit=15)
+    cnt_info = f"Найдено диалогов: {len(chats)}" if chats else "Сохранённых диалогов пока нет"
+    text = (
+        "📜 <b>Экспорт сохранённых диалогов в HTML</b>\n\n"
+        f"{cnt_info}.\n"
+        "Выберите диалог ниже, чтобы получить структурированный HTML-файл с полной историей сообщений:"
+    )
+    await message.answer(text, reply_markup=get_export_kb(), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "adm_menu_export")
+async def cb_admin_menu_export(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+    chats = get_recent_chats(limit=15)
+    cnt_info = f"Найдено диалогов: {len(chats)}" if chats else "Сохранённых диалогов пока нет"
+    text = (
+        "📜 <b>Экспорт сохранённых диалогов в HTML</b>\n\n"
+        f"{cnt_info}.\n"
+        "Выберите диалог ниже, чтобы получить структурированный HTML-файл с полной историей сообщений:"
+    )
+    await call.message.edit_text(text, reply_markup=get_export_kb(), parse_mode="HTML")
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm_dl_chat:"))
+async def cb_download_chat_html(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    chat_id = int(call.data.split(":", 1)[1])
+    msgs = get_chat_history(chat_id)
+    if not msgs:
+        await call.answer("В этом чате нет сохранённых сообщений!", show_alert=True)
+        return
+
+    await call.answer("Генерирую HTML...")
+    contact_name = msgs[0].get("full_name") or msgs[0].get("chat_title") or f"Чат {chat_id}"
+    username = msgs[0].get("username")
+    chat_meta = {
+        "chat_id": chat_id,
+        "full_name": contact_name,
+        "username": username,
+        "source": msgs[0].get("source", "business"),
+    }
+
+    html_str = generate_chat_html(chat_id, msgs, chat_meta)
+    doc = BufferedInputFile(html_str.encode("utf-8"), filename=f"chat_{chat_id}.html")
+
+    u_info = f" (@{username})" if username else ""
+    await call.message.answer_document(
+        document=doc,
+        caption=f"📜 <b>Диалог: {contact_name}{u_info}</b>\nВсего сообщений: {len(msgs)}",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "adm_dl_all")
+async def cb_download_all_chats_html(call: CallbackQuery):
+    if not config.is_admin(call.from_user.id):
+        await call.answer("Доступ запрещён!", show_alert=True)
+        return
+
+    chats = get_recent_chats(limit=100)
+    if not chats:
+        await call.answer("Нет сохранённых диалогов!", show_alert=True)
+        return
+
+    await call.answer("Формирую единый архив HTML...")
+    chats_with_msgs = []
+    total_msgs = 0
+    for c in chats:
+        c_msgs = get_chat_history(c["chat_id"])
+        if c_msgs:
+            chats_with_msgs.append((c, c_msgs))
+            total_msgs += len(c_msgs)
+
+    if not chats_with_msgs:
+        await call.answer("Нет сообщений для экспорта!", show_alert=True)
+        return
+
+    html_str = generate_all_chats_html(chats_with_msgs)
+    doc = BufferedInputFile(html_str.encode("utf-8"), filename="all_chats_archive.html")
+
+    await call.message.answer_document(
+        document=doc,
+        caption=f"📦 <b>Полный архив всех диалогов</b>\nЧатов: {len(chats_with_msgs)} | Сообщений: {total_msgs}",
+        parse_mode="HTML",
+    )

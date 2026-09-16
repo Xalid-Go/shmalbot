@@ -6,7 +6,14 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from config import config
-from handlers import admin_router, vision_router, inline_router, chat_router
+from database import init_db
+from handlers import (
+    admin_router,
+    business_router,
+    vision_router,
+    inline_router,
+    chat_router,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,11 +21,12 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-logger = logging.getLogger("pach_bot")
+logger = logging.getLogger("ai_assistant_bot")
 
 
 async def main():
-    logger.info("Initializing Pach Bot...")
+    logger.info("Initializing Bot and Database...")
+    init_db()
 
     bot = Bot(
         token=config.bot_token,
@@ -26,8 +34,9 @@ async def main():
     )
     dp = Dispatcher()
 
-    # Register routers (admin first, then vision, inline, and chat)
+    # Register routers in priority order
     dp.include_router(admin_router)
+    dp.include_router(business_router)
     dp.include_router(vision_router)
     dp.include_router(inline_router)
     dp.include_router(chat_router)
@@ -41,6 +50,11 @@ async def main():
 
     # Drop old updates so bot starts fresh
     await bot.delete_webhook(drop_pending_updates=True)
+
+    # Sync bot profile description with current AI state
+    from database import is_ai_enabled
+    from handlers.admin import update_bot_profile_description
+    await update_bot_profile_description(bot, is_ai_enabled())
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

@@ -15,6 +15,9 @@ class Config:
     fallback_models: list[str]
     admin_ids: set[int] = field(default_factory=set)
     vision_mode: str = "all"  # Options: 'all', 'admin_only', 'disabled'
+    cloudflare_account_id: str = "a782db9fe21b2103266ff019c4c6f4e6"
+    cloudflare_api_token: str = ""
+    cloudflare_backup_token: str = ""
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_ids
@@ -30,11 +33,11 @@ class Config:
 def load_config() -> Config:
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not bot_token:
-        raise ValueError("TELEGRAM_BOT_TOKEN is not set in .env")
+        raise ValueError("TELEGRAM_BOT_TOKEN is not set (add it to Environment Variables in your hosting dashboard or .env)")
 
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
-        raise ValueError("OPENAI_API_KEY is not set in .env")
+        raise ValueError("OPENAI_API_KEY is not set (add it to Environment Variables in your hosting dashboard or .env)")
 
     base_url = os.getenv("OPENAI_BASE_URL", "https://free.sysik.mom/v1").strip()
     model = os.getenv("OPENAI_MODEL", "gemini-3.8-flash").strip()
@@ -47,6 +50,10 @@ def load_config() -> Config:
         if item.isdigit():
             admin_ids.add(int(item))
 
+    cf_account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "a782db9fe21b2103266ff019c4c6f4e6").strip()
+    cf_api_token = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+    cf_backup_token = os.getenv("CLOUDFLARE_BACKUP_TOKEN", "").strip()
+
     return Config(
         bot_token=bot_token,
         api_key=api_key,
@@ -55,6 +62,9 @@ def load_config() -> Config:
         fallback_models=fallback_models,
         admin_ids=admin_ids,
         vision_mode="all",
+        cloudflare_account_id=cf_account_id,
+        cloudflare_api_token=cf_api_token,
+        cloudflare_backup_token=cf_backup_token,
     )
 
 
